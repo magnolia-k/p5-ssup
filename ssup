@@ -1,0 +1,242 @@
+#!/usr/bin/env perl
+
+# setup scala and sbt
+
+use strict;
+use warnings;
+
+use v5.14;
+
+# ==============================
+# public function
+# ==============================
+
+App::Ssup::main() unless caller;
+
+# ==============================
+# private functions
+# ==============================
+
+package App::Ssup;
+
+use strict;
+use warnings;
+
+use autodie;
+
+our $VERSION = '0.0.1';
+
+use Getopt::Long qw/GetOptionsFromArray/;
+use Cwd;
+use HTTP::Tiny;
+use File::Path qw/make_path/;
+use File::Spec;
+use File::Temp;
+use Archive::Tar;
+use File::Find;
+use File::Copy;
+
+my $ver_reg_scala = qr/2\.\d{2}\.\d/;
+my $ver_reg_sbt   = qr/0\.\d{2}\.\d/;
+
+sub main {
+    my $config = parse_arguments( \@ARGV, getcwd() );
+    validate_config( $config );
+
+    # for embedded unit test
+    Test::App::Ssup::run_tests() if $config->{test};
+
+    # for run application
+    my $scala_ver_list = fetch_scala_version_list();
+    my $sbt_ver_list   = fetch_sbt_version_list();
+
+    my %targets = (
+        scala => get_target( 'scala', $config, $scala_ver_list ),
+        docs  => get_target( 'docs',  $config, $scala_ver_list ),
+        sbt   => get_target( 'sbt',   $config, $sbt_ver_list   ),
+    );
+
+    my $temp = File::Temp->newdir();
+
+    foreach my $t ( keys %targets ) {
+        say $targets{$t}->{url};
+        my $dist_path = download_dist_file( $targets{$t}->{url}, $temp );
+        my $extracted = extract_dist_file( $dist_path, $temp );
+        copy_all_files( $extracted, $config->{dir} );
+    }
+    
+    exit 0;
+}
+
+sub parse_arguments {
+    my ( $argv, $current_dir ) = @_;
+
+    my $dir = 'scala/';
+    my ( $scala, $sbt, $test );
+    GetOptionsFromArray( $argv,
+            'd|dir=s'   => \$dir,
+            'scala=s'   => \$scala,
+            'sbt=s'     => \$sbt,
+            't|test'    => \$test,
+            );
+
+    my $install_dir = File::Spec->file_name_is_absolute( $dir ) ?  $dir :
+        File::Spec->catdir( $current_dir, $dir );
+
+    my $config = {
+        ver_scala   => defined $scala ? $scala : 'latest',
+        ver_docs    => defined $scala ? $scala : 'latest',
+        ver_sbt     => defined $sbt   ? $sbt   : 'latest',
+
+        dir     => $install_dir,
+
+        test    => $test,
+    };
+
+    return $config;
+}
+
+sub validate_config {
+    my $config = shift;
+
+    # validate install dir.
+    if ( ! -d $config->{dir} ) {
+        make_path( $config->{dir} );
+    }
+
+    if ( ! -w _ ) {
+        die "Can't write to '$config->{dir}'.";
+    }
+
+    opendir my $dh, $config->{dir};
+    my @list = readdir $dh;
+    if ( @list > 2 ) { die "'$config->{dir}' is not empty directory"}
+    closedir $dh;
+}
+
+sub fetch_scala_version_list {
+    my $site = 'http://www.scala-lang.org/files/archive/';
+    my $res  = HTTP::Tiny->new->get( $site );
+
+    die "Can't fetch scala's version list" unless $res->{success};
+
+    my %result;
+    while ( $res->{content} =~ /<a href="scala-(2\.\d{2}\.\d)\.tgz">/g ) {
+        $result{$1} = {
+            scala   => $site . 'scala-'      . $1 . '.tgz',
+            docs    => $site . 'scala-docs-' . $1 . '.tgz',
+        };
+    }
+
+    return \%result;
+}
+
+sub get_target {
+    my ( $target, $config, $list ) = @_;
+
+    # for latest version
+    if ( $config->{'ver_' . $target} eq 'latest' ) {
+        my @vers = sort keys %{ $list };
+        my $latest = $vers[-1];
+
+        return { ver => $latest, url => $list->{$latest}->{$target} };
+    }
+
+    # for specified version
+    if ( exists $list->{$config->{'ver_' . $target}} ) {
+        return {
+            ver => $config->{'ver_' + $target},
+            url => $list->{$config->{'ver_' . $target}},
+        };
+    }
+
+    # error
+    die "Can't find version '$config->{'ver_' . $target}' for target '$target'";
+}
+
+sub fetch_sbt_version_list {
+    my $site = 'http://dl.bintray.com/sbt/native-packages/sbt/';
+    my $res  = HTTP::Tiny->new->get( $site );
+    
+    die "Can't fetch sbt's version list" unless $res->{success};
+
+    my %result;
+    while ( $res->{content} =~ /href="#(0\.\d{2}\.\d)\/"/g ) {
+        $result{$1} = { sbt => $site . $1 . '/sbt-' . $1 . '.tgz' };
+    }
+
+    return \%result;
+}
+
+sub download_dist_file {
+    my ( $url, $dir ) = @_;
+
+    my @frag = split( '/', $url );
+    my $path = File::Spec->catfile( $dir, $frag[-1] );
+
+    my $res  = HTTP::Tiny->new->mirror( $url, $path );
+
+    die "Can't fetch dist file from $url" unless $res->{success};
+
+    return $path;
+}
+
+sub extract_dist_file {
+    my ( $dist_file, $dir ) = @_;
+
+    my $tar = Archive::Tar->new;
+    $tar->read( $dist_file ) or $tar->error;
+    my @list = $tar->list_files;
+    $tar->setcwd( $dir );
+    $tar->extract or $tar->error;
+
+    say $list[0];
+
+    return File::Spec->catdir( $dir, $list[0] );
+}
+
+sub copy_all_files {
+    my ( $from, $dest ) = @_;
+
+    my $callback = sub {
+        my $file_from = $_;
+
+        my $file_to = $File::Find::name;
+        $file_to =~ s#^$from#$dest#;
+
+        if ( -d $file_from && ! -e $file_to ) {
+            mkdir $file_to;
+        } else {
+            copy( $file_from, $file_to );
+
+            if ( -x $file_from ) {
+                chmod 0755, $file_to;
+            }
+        }
+    };
+
+    find( $callback, ( $from ) );
+}
+
+# embedded unit tests
+package Test::App::Ssup;
+
+use strict;
+use warnings;
+
+use Test::More;
+
+sub run_tests {
+}
+
+__END__
+
+=pod
+
+=head1 NAME
+
+ssup - setup scala and sbt
+
+=head1 SYNOPSIS
+
+=cut
