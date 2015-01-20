@@ -34,7 +34,7 @@ use File::Spec;
 use File::Temp;
 use Archive::Tar;
 use File::Find;
-use File::Copy;
+use File::Copy qw/cp/;
 
 my $ver_reg_scala = qr/2\.\d{2}\.\d/;
 my $ver_reg_sbt   = qr/0\.\d{2}\.\d/;
@@ -42,9 +42,6 @@ my $ver_reg_sbt   = qr/0\.\d{2}\.\d/;
 sub main {
     my $config = parse_arguments( \@ARGV, getcwd() );
     validate_config( $config );
-
-    # for embedded unit test
-    Test::App::Ssup::run_tests() if $config->{test};
 
     # for run application
     my $scala_ver_list = fetch_scala_version_list();
@@ -58,8 +55,8 @@ sub main {
 
     my $temp = File::Temp->newdir();
 
-    foreach my $t ( keys %targets ) {
-        say $targets{$t}->{url};
+    foreach my $t ( reverse sort keys %targets ) {
+        say "Install $t $targets{$t}->{ver} to $config->{dir}.";
         my $dist_path = download_dist_file( $targets{$t}->{url}, $temp );
         my $extracted = extract_dist_file( $dist_path, $temp );
         copy_all_files( $extracted, $config->{dir} );
@@ -145,8 +142,8 @@ sub get_target {
     # for specified version
     if ( exists $list->{$config->{'ver_' . $target}} ) {
         return {
-            ver => $config->{'ver_' + $target},
-            url => $list->{$config->{'ver_' . $target}},
+            ver => $config->{'ver_' . $target},
+            url => $list->{$config->{'ver_' . $target}}->{$target},
         };
     }
 
@@ -190,8 +187,6 @@ sub extract_dist_file {
     $tar->setcwd( $dir );
     $tar->extract or $tar->error;
 
-    say $list[0];
-
     return File::Spec->catdir( $dir, $list[0] );
 }
 
@@ -207,26 +202,11 @@ sub copy_all_files {
         if ( -d $file_from && ! -e $file_to ) {
             mkdir $file_to;
         } else {
-            copy( $file_from, $file_to );
-
-            if ( -x $file_from ) {
-                chmod 0755, $file_to;
-            }
+            cp( $file_from, $file_to );
         }
     };
 
     find( $callback, ( $from ) );
-}
-
-# embedded unit tests
-package Test::App::Ssup;
-
-use strict;
-use warnings;
-
-use Test::More;
-
-sub run_tests {
 }
 
 __END__
@@ -235,7 +215,7 @@ __END__
 
 =head1 NAME
 
-ssup - setup scala and sbt
+  ssup - setup scala and sbt
 
 =head1 SYNOPSIS
 
