@@ -5,7 +5,7 @@
 # SYNOPSIS
 
     # install latest version
-    $ curl http://goo.gl/JFJITE | perl
+    $ curl -L http://goo.gl/JFJITE | perl
 
     or
 
