@@ -35,6 +35,7 @@ use File::Temp;
 use Archive::Tar;
 use File::Find;
 use File::Copy qw/cp/;
+use version;
 
 my $ver_reg_scala = qr/2\.\d{2}\.\d/;
 my $ver_reg_sbt   = qr/0\.\d{2}\.\d/;
@@ -118,7 +119,7 @@ sub fetch_scala_version_list {
     die "Can't fetch scala's version list" unless $res->{success};
 
     my %result;
-    while ( $res->{content} =~ /<a href="scala-(2\.\d{2}\.\d)\.tgz">/g ) {
+    while ( $res->{content} =~ /<a href="scala-(2\.\d+\.\d+)\.tgz">/g ) {
         $result{$1} = {
             scala   => $site . 'scala-'      . $1 . '.tgz',
             docs    => $site . 'scala-docs-' . $1 . '.tgz',
@@ -133,9 +134,8 @@ sub get_target {
 
     # for latest version
     if ( $config->{'ver_' . $target} eq 'latest' ) {
-        my @vers = sort keys %{ $list };
+        my @vers = sort map { version->parse( $_ ) } keys %{ $list };
         my $latest = $vers[-1];
-
         return { ver => $latest, url => $list->{$latest}->{$target} };
     }
 
@@ -158,7 +158,7 @@ sub fetch_sbt_version_list {
     die "Can't fetch sbt's version list" unless $res->{success};
 
     my %result;
-    while ( $res->{content} =~ /href="#(0\.\d{2}\.\d)\/"/g ) {
+    while ( $res->{content} =~ /href="#(0\.\d+\.\d+)\/"/g ) {
         $result{$1} = { sbt => $site . $1 . '/sbt-' . $1 . '.tgz' };
     }
 
