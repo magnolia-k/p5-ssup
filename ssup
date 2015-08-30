@@ -158,7 +158,7 @@ sub fetch_sbt_version_list {
     die "Can't fetch sbt's version list" unless $res->{success};
 
     my %result;
-    while ( $res->{content} =~ /href="#(0\.\d+\.\d+)\/"/g ) {
+    while ( $res->{content} =~ /href="%(0\.\d+\.\d+)\/"/g ) {
         $result{$1} = { sbt => $site . $1 . '/sbt-' . $1 . '.tgz' };
     }
 
